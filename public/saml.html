@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SAML 2.0 协议测试</title>
+  <link href="/lib/bootstrap-5.3.3/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</head>
+<body>
+  <div class="container py-4">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">首页</a></li>
+        <li class="breadcrumb-item active">SAML 2.0 协议测试</li>
+      </ol>
+    </nav>
+
+    <div class="card">
+      <div class="card-header"><h4 class="mb-0">SAML 2.0 协议测试</h4></div>
+      <div class="card-body">
+        <!-- 服务配置 -->
+        <div class="card mb-3">
+          <div class="card-header">服务配置</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">Issuer（SP 实体标识）</label>
+                <input id="issuer" class="form-control form-control-sm" value="http://localhost:8011">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label">ACS URL（断言消费地址）</label>
+                <input id="acsUrl" class="form-control form-control-sm" value="http://localhost:8011/saml/acs">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 登录成功状态 -->
+        <div id="loggedInPanel" class="card mb-3 border-success" style="display:none;">
+          <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+            <span><strong>登录成功</strong></span>
+            <button class="btn btn-sm btn-light" onclick="logout()">退出登录</button>
+          </div>
+          <div class="card-body">
+            <div class="row">
+              <div class="col-md-6">
+                <p><strong>用户ID:</strong> <code id="userId"></code></p>
+              </div>
+              <div class="col-md-6">
+                <p><strong>RelayState:</strong> <code id="relayState"></code></p>
+              </div>
+            </div>
+            <hr>
+            <h6>用户属性</h6>
+            <div id="userIcon" class="mb-3" style="display:none;">
+              <strong>头像:</strong>
+              <img id="iconImg" src="" alt="用户头像" class="img-thumbnail d-block" style="max-width: 120px;">
+            </div>
+            <pre id="userAttributes" class="bg-light p-3 rounded" style="font-size: 0.85rem;"></pre>
+            <hr>
+            <h6>SAML Response（原始 XML）</h6>
+            <pre id="samlResponseRaw" class="bg-light p-3 rounded" style="font-size: 0.75rem; max-height: 300px; overflow: auto;"></pre>
+          </div>
+        </div>
+
+        <!-- 未登录 -->
+        <div id="loginPanel" class="text-center py-5">
+          <button id="loginBtn" class="btn btn-primary btn-lg px-5" onclick="startLogin()">
+            SAML 登录
+          </button>
+          <p class="text-muted mt-2 small">点击后将跳转至 SAML IdP 登录页面进行统一身份认证</p>
+        </div>
+
+        <!-- SAML 消息查看器 -->
+        <div id="samlMessagePanel" class="card mt-3" style="display:none;">
+          <div class="card-header">SAML 消息</div>
+          <div class="card-body">
+            <ul class="nav nav-tabs" id="samlTabs" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="authnreq-tab" data-bs-toggle="tab" data-bs-target="#authnreq" type="button" role="tab">AuthnRequest</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" id="response-tab" data-bs-toggle="tab" data-bs-target="#response" type="button" role="tab">SAML Response</button>
+              </li>
+            </ul>
+            <div class="tab-content mt-2">
+              <div class="tab-pane fade show active" id="authnreq" role="tabpanel">
+                <pre id="authnReqXml" class="bg-light p-3 rounded" style="font-size: 0.75rem; max-height: 200px; overflow: auto;">暂无</pre>
+              </div>
+              <div class="tab-pane fade" id="response" role="tabpanel">
+                <pre id="samlRespXml" class="bg-light p-3 rounded" style="font-size: 0.75rem; max-height: 200px; overflow: auto;">暂无</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="errorAlert" class="alert alert-danger mt-2" style="display:none;"></div>
+        <div id="loadingSpinner" class="text-center mt-2" style="display:none;">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('acsUrl').value = window.location.origin + '/saml/acs';
+
+    function getQueryParam(name) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get(name);
+    }
+
+    function clearQueryParams() {
+      const url = new URL(window.location);
+      url.search = '';
+      window.history.replaceState({}, '', url);
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('errorAlert');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function hideError() {
+      document.getElementById('errorAlert').style.display = 'none';
+    }
+
+    function setLoading(loading) {
+      document.getElementById('loadingSpinner').style.display = loading ? 'block' : 'none';
+      document.getElementById('loginBtn').disabled = loading;
+    }
+
+    // base64 解码
+    function base64Decode(str) {
+      try {
+        return atob(str);
+      } catch(e) {
+        try {
+          return atob(str.replace(/-/g, '+').replace(/_/g, '/'));
+        } catch(e2) {
+          return '解码失败: ' + e2.message;
+        }
+      }
+    }
+
+    // 格式化 XML
+    function formatXml(xml) {
+      try {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xml, 'text/xml');
+        const serializer = new XMLSerializer();
+        return serializer.serializeToString(xmlDoc);
+      } catch(e) {
+        return xml;
+      }
+    }
+
+    // 步骤1: 开始登录
+    async function startLogin() {
+      hideError();
+      setLoading(true);
+
+      const issuer = document.getElementById('issuer').value.trim();
+      const acsUrl = document.getElementById('acsUrl').value.trim();
+      if (!issuer) {
+        showError('请填写 Issuer 地址');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/saml/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issuer, acsUrl })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0 || !data.loginUrl) {
+          showError(data.errmsg || '获取登录链接失败');
+          setLoading(false);
+          return;
+        }
+
+        // 显示 AuthnRequest
+        if (data.authnRequestXml) {
+          document.getElementById('authnReqXml').textContent = formatXml(data.authnRequestXml);
+          document.getElementById('samlMessagePanel').style.display = 'block';
+        }
+
+        window.location.href = data.loginUrl;
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+        setLoading(false);
+      }
+    }
+
+    // 步骤2: 页面加载时检测 SAMLResponse 回调
+    (async function() {
+      const samlResponse = getQueryParam('SAMLResponse');
+      if (!samlResponse) return;
+
+      // 页面通过 ACS 自动 POST 表单提交了 SAMLResponse
+      // 但由于我们是 JS 测试页面，SAMLResponse 实际上是服务器端直接 POST 到 SP 的 ACS 端点
+      // 测试服务器 /saml/acs 端点会接收并解析
+    })();
+
+    // 步骤2: 检测是否通过传统方式回调 (RequestID)
+    (async function() {
+      const requestId = getQueryParam('RequestID');
+      if (!requestId) return;
+
+      clearQueryParams();
+      setLoading(true);
+
+      try {
+        // 这是我们自定义的回调方式（非标准SAML，用于测试）
+        // 标准的SAML不会回调到此页面，而是直接POST到SP的ACS地址
+        // 这个处理仅用于测试页面管理
+        const resp = await fetch('/api/saml/callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestId })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0) {
+          showError(data.errmsg || '获取用户信息失败');
+          setLoading(false);
+          return;
+        }
+
+        document.getElementById('userId').textContent = data.userId || '';
+        document.getElementById('relayState').textContent = data.relayState || '';
+        document.getElementById('userAttributes').textContent = JSON.stringify(data.attributes || {}, null, 2);
+        // 包含 icon 时显示头像
+        if (data.userDetail && data.userDetail.icon) {
+          document.getElementById('iconImg').src = data.ssoBase + '/' + data.userDetail.icon;
+          document.getElementById('userIcon').style.display = 'block';
+        }
+        if (data.samlResponseXml) {
+          const formatted = formatXml(data.samlResponseXml);
+          document.getElementById('samlResponseRaw').textContent = formatted;
+          document.getElementById('samlRespXml').textContent = formatted;
+          document.getElementById('samlMessagePanel').style.display = 'block';
+        }
+        document.getElementById('loggedInPanel').style.display = 'block';
+        document.getElementById('loginPanel').style.display = 'none';
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    // 退出登录
+    async function logout() {
+      const issuer = document.getElementById('issuer').value.trim();
+      try {
+        const resp = await fetch('/api/saml/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issuer })
+        });
+        const data = await resp.json();
+        if (data.logoutUrl) {
+          window.location.href = data.logoutUrl;
+        }
+      } catch (err) {
+        showError('退出失败: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>

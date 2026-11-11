@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenID Connect 协议测试</title>
+  <link href="/lib/bootstrap-5.3.3/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <div class="container py-4">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">首页</a></li>
+        <li class="breadcrumb-item active">OpenID Connect (OIDC) 协议测试</li>
+      </ol>
+    </nav>
+
+    <div class="card">
+      <div class="card-header"><h4 class="mb-0">OpenID Connect (OIDC) 协议测试</h4></div>
+      <div class="card-body">
+        <!-- 应用配置 -->
+        <div class="card mb-3">
+          <div class="card-header">应用配置</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label">client_id</label>
+                <input id="clientId" class="form-control form-control-sm" value="6f443b3811a52d3cc857e34765c71cd5">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">client_secret</label>
+                <input id="clientSecret" class="form-control form-control-sm" value="yq-5053cbe869be75ec54b10047431a5a8e">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">redirect_uri</label>
+                <input id="redirectUri" class="form-control form-control-sm" value="">
+              </div>
+            </div>
+            <div class="row g-3 mt-2">
+              <div class="col-md-4">
+                <label class="form-label">scope</label>
+                <input id="scope" class="form-control form-control-sm" value="openid profile">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 登录成功状态 -->
+        <div id="loggedInPanel" class="card mb-3 border-success" style="display:none;">
+          <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+            <span><strong>登录成功</strong></span>
+            <button class="btn btn-sm btn-light" onclick="logout()">退出登录</button>
+          </div>
+          <div class="card-body">
+            <p><strong>sub (userid):</strong> <code id="userSub"></code></p>
+            <p><strong>access_token:</strong> <code class="small" style="word-break: break-all;" id="accessToken"></code></p>
+            <div id="userIcon" class="mb-3" style="display:none;">
+              <strong>头像:</strong>
+              <img id="iconImg" src="" alt="用户头像" class="img-thumbnail d-block" style="max-width: 120px;">
+            </div>
+            <pre id="userInfo" class="bg-light p-3 rounded" style="font-size: 0.85rem;"></pre>
+          </div>
+        </div>
+
+        <!-- 未登录 -->
+        <div id="loginPanel" class="text-center py-5">
+          <button id="loginBtn" class="btn btn-primary btn-lg px-5" onclick="startLogin()">
+            SSO 登录
+          </button>
+          <p class="text-muted mt-2 small">点击后将跳转至 SSO 页面进行 OIDC 登录（登录跳转及 code 处理由服务端完成）</p>
+        </div>
+
+        <div id="errorAlert" class="alert alert-danger mt-2" style="display:none;"></div>
+        <div id="loadingSpinner" class="text-center mt-2" style="display:none;">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('redirectUri').value = window.location.origin + '/oidc.html';
+
+    function getQueryParam(name) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get(name);
+    }
+
+    function clearQueryParams() {
+      const url = new URL(window.location);
+      url.search = '';
+      window.history.replaceState({}, '', url);
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('errorAlert');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function hideError() {
+      document.getElementById('errorAlert').style.display = 'none';
+    }
+
+    function setLoading(loading) {
+      document.getElementById('loadingSpinner').style.display = loading ? 'block' : 'none';
+      document.getElementById('loginBtn').disabled = loading;
+    }
+
+    // 步骤1: 开始登录
+    async function startLogin() {
+      hideError();
+      setLoading(true);
+
+      const clientId = document.getElementById('clientId').value.trim();
+      const clientSecret = document.getElementById('clientSecret').value.trim();
+      const redirectUri = document.getElementById('redirectUri').value.trim();
+      const scope = document.getElementById('scope').value.trim();
+      const nonce = Math.random().toString(36).substring(2, 10);
+
+      if (!clientId || !clientSecret || !redirectUri) {
+        showError('请填写完整的配置信息');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/oidc/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clientId, clientSecret, redirectUri, scope, nonce })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0 || !data.authorizeUrl) {
+          showError(data.errmsg || '获取授权链接失败');
+          setLoading(false);
+          return;
+        }
+
+        window.location.href = data.authorizeUrl;
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+        setLoading(false);
+      }
+    }
+
+    // 步骤2: 页面加载时检测 code 回调
+    (async function() {
+      const code = getQueryParam('code');
+      if (!code) return;
+
+      clearQueryParams();
+      setLoading(true);
+
+      try {
+        const resp = await fetch('/api/oidc/callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0) {
+          showError(data.errmsg || '获取用户信息失败');
+          setLoading(false);
+          return;
+        }
+
+        document.getElementById('userSub').textContent = data.sub;
+        document.getElementById('accessToken').textContent = data.accessToken;
+        document.getElementById('userInfo').textContent = JSON.stringify(data.userInfo, null, 2);
+        // 包含 icon 时显示头像
+        if (data.userInfo && data.userInfo.icon) {
+          document.getElementById('iconImg').src = data.ssoBase + '/' + data.userInfo.icon;
+          document.getElementById('userIcon').style.display = 'block';
+        }
+        document.getElementById('loggedInPanel').style.display = 'block';
+        document.getElementById('loginPanel').style.display = 'none';
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    // 退出登录
+    async function logout() {
+      const redirectUri = document.getElementById('redirectUri').value.trim();
+      try {
+        const resp = await fetch('/api/oidc/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirectUri })
+        });
+        const data = await resp.json();
+        if (data.logoutUrl) {
+          window.location.href = data.logoutUrl;
+        }
+      } catch (err) {
+        showError('退出失败: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>

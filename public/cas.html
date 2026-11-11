@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CAS 2.0 协议测试</title>
+  <link href="/lib/bootstrap-5.3.3/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <div class="container py-4">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">首页</a></li>
+        <li class="breadcrumb-item active">CAS 2.0 协议测试</li>
+      </ol>
+    </nav>
+
+    <div class="card">
+      <div class="card-header"><h4 class="mb-0">CAS 2.0 协议测试</h4></div>
+      <div class="card-body">
+        <!-- 服务配置 -->
+        <div class="card mb-3">
+          <div class="card-header">服务配置</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label">service（回调地址）</label>
+                <input id="service" class="form-control form-control-sm" value="">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 登录成功状态 -->
+        <div id="loggedInPanel" class="card mb-3 border-success" style="display:none;">
+          <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+            <span><strong>登录成功</strong></span>
+            <button class="btn btn-sm btn-light" onclick="logout()">退出登录</button>
+          </div>
+          <div class="card-body">
+            <p><strong>用户:</strong> <code id="userName"></code></p>
+            <div id="userIcon" class="mb-3" style="display:none;">
+              <strong>头像:</strong>
+              <img id="iconImg" src="" alt="用户头像" class="img-thumbnail d-block" style="max-width: 120px;">
+            </div>
+            <pre id="userDetail" class="bg-light p-3 rounded" style="font-size: 0.85rem;"></pre>
+          </div>
+        </div>
+
+        <!-- 未登录 -->
+        <div id="loginPanel" class="text-center py-5">
+          <button id="loginBtn" class="btn btn-primary btn-lg px-5" onclick="startLogin()">
+            SSO 登录
+          </button>
+          <p class="text-muted mt-2 small">点击后将跳转至 CAS 登录页面进行统一身份认证（ticket 验证由服务端完成）</p>
+        </div>
+
+        <div id="errorAlert" class="alert alert-danger mt-2" style="display:none;"></div>
+        <div id="loadingSpinner" class="text-center mt-2" style="display:none;">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('service').value = window.location.origin + '/cas.html';
+
+    function getQueryParam(name) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get(name);
+    }
+
+    function clearQueryParams() {
+      const url = new URL(window.location);
+      url.search = '';
+      window.history.replaceState({}, '', url);
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('errorAlert');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    function hideError() {
+      document.getElementById('errorAlert').style.display = 'none';
+    }
+
+    function setLoading(loading) {
+      document.getElementById('loadingSpinner').style.display = loading ? 'block' : 'none';
+      document.getElementById('loginBtn').disabled = loading;
+    }
+
+    // 步骤1: 开始登录
+    async function startLogin() {
+      hideError();
+      setLoading(true);
+
+      const service = document.getElementById('service').value.trim();
+      if (!service) {
+        showError('请填写 service 地址');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/cas/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0 || !data.loginUrl) {
+          showError(data.errmsg || '获取登录链接失败');
+          setLoading(false);
+          return;
+        }
+
+        window.location.href = data.loginUrl;
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+        setLoading(false);
+      }
+    }
+
+    // 步骤2: 页面加载时检测 ticket 回调
+    (async function() {
+      const ticket = getQueryParam('ticket');
+      if (!ticket) return;
+
+      clearQueryParams();
+      setLoading(true);
+
+      try {
+        const service = document.getElementById('service').value.trim();
+
+        const resp = await fetch('/api/cas/callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ticket, service })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0) {
+          showError(data.errmsg || '获取用户信息失败');
+          setLoading(false);
+          return;
+        }
+
+        document.getElementById('userName').textContent = data.userName;
+        document.getElementById('userDetail').textContent = JSON.stringify(data.userDetail, null, 2);
+        // 包含 icon 时显示头像
+        if (data.userDetail && data.userDetail.icon) {
+          document.getElementById('iconImg').src = data.ssoBase + '/' + data.userDetail.icon;
+          document.getElementById('userIcon').style.display = 'block';
+        }
+        document.getElementById('loggedInPanel').style.display = 'block';
+        document.getElementById('loginPanel').style.display = 'none';
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    // 退出登录
+    async function logout() {
+      const service = document.getElementById('service').value.trim();
+      try {
+        const resp = await fetch('/api/cas/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service })
+        });
+        const data = await resp.json();
+        if (data.logoutUrl) {
+          window.location.href = data.logoutUrl;
+        }
+      } catch (err) {
+        showError('退出失败: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>

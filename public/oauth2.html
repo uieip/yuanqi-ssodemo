@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OAuth 2.0 协议测试</title>
+  <link href="/lib/bootstrap-5.3.3/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+  <div class="container py-4">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">首页</a></li>
+        <li class="breadcrumb-item active">OAuth 2.0 协议测试</li>
+      </ol>
+    </nav>
+
+    <div class="card">
+      <div class="card-header"><h4 class="mb-0">OAuth 2.0 协议测试</h4></div>
+      <div class="card-body">
+        <!-- 应用配置 -->
+        <div class="card mb-3">
+          <div class="card-header">应用配置</div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label">AppID / client_id</label>
+                <input id="appid" class="form-control form-control-sm" value="6f443b3811a52d3cc857e34765c71cd5">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">CorpSecret / client_secret</label>
+                <input id="secret" class="form-control form-control-sm" value="yq-5053cbe869be75ec54b10047431a5a8e">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">redirect_uri</label>
+                <input id="redirectUri" class="form-control form-control-sm" value="">
+              </div>
+            </div>
+            <div class="row g-3 mt-2">
+              <div class="col-md-4">
+                <label class="form-label">scope</label>
+                <select id="scope" class="form-select form-select-sm">
+                  <option value="snsapi_base">snsapi_base（静默授权）</option>
+                  <option value="snsapi_privateinfo">snsapi_privateinfo（手动授权）</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 登录成功状态 -->
+        <div id="loggedInPanel" class="card mb-3 border-success" style="display:none;">
+          <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+            <span><strong>登录成功</strong></span>
+            <button class="btn btn-sm btn-light" onclick="logout()">退出登录</button>
+          </div>
+          <div class="card-body">
+            <p><strong>UserID:</strong> <code id="userId"></code></p>
+            <div id="userIcon" class="mb-3" style="display:none;">
+              <strong>头像:</strong>
+              <img id="iconImg" src="" alt="用户头像" class="img-thumbnail d-block" style="max-width: 120px;">
+            </div>
+            <pre id="userDetail" class="bg-light p-3 rounded" style="font-size: 0.85rem;"></pre>
+          </div>
+        </div>
+
+        <!-- 未登录 -->
+        <div id="loginPanel" class="text-center py-5">
+          <button id="loginBtn" class="btn btn-primary btn-lg px-5" onclick="startLogin()">
+            SSO 登录
+          </button>
+          <p class="text-muted mt-2 small">点击后将自动获取 access_token 并跳转至 SSO 页面进行登录（登录跳转由服务端完成）</p>
+        </div>
+
+        <div id="errorAlert" class="alert alert-danger mt-2" style="display:none;"></div>
+        <div id="loadingSpinner" class="text-center mt-2" style="display:none;">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">加载中...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 初始化 redirect_uri
+    document.getElementById('redirectUri').value = window.location.origin + '/oauth2.html';
+
+    // 从 URL 获取 query 参数
+    function getQueryParam(name) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get(name);
+    }
+
+    // 清除 URL 参数
+    function clearQueryParams() {
+      const url = new URL(window.location);
+      url.search = '';
+      window.history.replaceState({}, '', url);
+    }
+
+    // 显示错误
+    function showError(msg) {
+      const el = document.getElementById('errorAlert');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+
+    // 隐藏错误
+    function hideError() {
+      document.getElementById('errorAlert').style.display = 'none';
+    }
+
+    // 显示/隐藏加载
+    function setLoading(loading) {
+      document.getElementById('loadingSpinner').style.display = loading ? 'block' : 'none';
+      document.getElementById('loginBtn').disabled = loading;
+    }
+
+    // 步骤1: 开始登录（服务端获取 access_token）
+    async function startLogin() {
+      hideError();
+      setLoading(true);
+
+      const appid = document.getElementById('appid').value.trim();
+      const secret = document.getElementById('secret').value.trim();
+      const redirectUri = document.getElementById('redirectUri').value.trim();
+      const scope = document.getElementById('scope').value;
+
+      if (!appid || !secret || !redirectUri) {
+        showError('请填写完整的配置信息');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/oauth2/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appid, corpsecret: secret, redirectUri, scope })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0 || !data.authorizeUrl) {
+          showError(data.errmsg || '获取授权链接失败');
+          setLoading(false);
+          return;
+        }
+
+        // 跳转到 SSO 授权页
+        window.location.href = data.authorizeUrl;
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+        setLoading(false);
+      }
+    }
+
+    // 步骤2: 页面加载时检测 code 回调（SSO 登录完成后跳回）
+    (async function() {
+      const code = getQueryParam('code');
+      if (!code) return;
+
+      clearQueryParams();
+      setLoading(true);
+
+      try {
+        // 发送 code 给服务端，由服务端获取用户信息
+        const resp = await fetch('/api/oauth2/callback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const data = await resp.json();
+
+        if (data.errcode !== 0) {
+          showError(data.errmsg || '获取用户信息失败');
+          setLoading(false);
+          return;
+        }
+
+        // 显示用户信息
+        document.getElementById('userId').textContent = data.userid;
+        if (data.userDetail) {
+          document.getElementById('userDetail').textContent = JSON.stringify(data.userDetail, null, 2);
+          // 包含 icon 时显示头像
+          if (data.userDetail.icon) {
+            document.getElementById('iconImg').src = data.ssoBase + '/' + data.userDetail.icon;
+            document.getElementById('userIcon').style.display = 'block';
+          }
+        } else {
+          document.getElementById('userDetail').textContent = '（snsapi_base 静默授权，仅返回 UserId）';
+        }
+        document.getElementById('loggedInPanel').style.display = 'block';
+        document.getElementById('loginPanel').style.display = 'none';
+      } catch (err) {
+        showError('请求失败: ' + err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    // 退出登录
+    async function logout() {
+      const redirectUri = document.getElementById('redirectUri').value.trim();
+      try {
+        const resp = await fetch('/api/oauth2/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirectUri })
+        });
+        const data = await resp.json();
+        if (data.logoutUrl) {
+          window.location.href = data.logoutUrl;
+        }
+      } catch (err) {
+        showError('退出失败: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
